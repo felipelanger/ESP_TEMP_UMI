@@ -21,6 +21,16 @@ const char* apiUrl =
     "http://ubuntuserver.local:5000/api/oled";
 
 /* =========================
+   UPTIME KUMA
+========================= */
+
+const char* kumaUp =
+    "http://ubuntuserver.local:3001/api/push/jINTbLvK1M?status=up&msg=OLED_OK&ping=1";
+
+const char* kumaDown =
+    "http://ubuntuserver.local:3001/api/push/jINTbLvK1M?status=down&msg=API_FAIL&ping=0";
+
+/* =========================
    OLED
 ========================= */
 
@@ -44,6 +54,13 @@ float humidity = 0;
 float current = 0;
 float power = 0;
 
+bool apiConnected = false;
+
+bool blinkState = false;
+
+unsigned long lastBlink = 0;
+unsigned long lastUpdate = 0;
+
 /* =========================
    WIFI
 ========================= */
@@ -65,8 +82,68 @@ void connectWifi() {
 
   Serial.println();
   Serial.println("WiFi conectado!");
+
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
+}
+
+/* =========================
+   UPTIME KUMA
+========================= */
+
+void sendKuma(bool success) {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Kuma ignorado - WiFi OFF");
+    return;
+  }
+
+  WiFiClient client;
+  HTTPClient http;
+
+  const char* url;
+
+  if (success) {
+    url = kumaUp;
+  } else {
+    url = kumaDown;
+  }
+
+  Serial.println();
+  Serial.println("=========================");
+  Serial.println("UPTIME KUMA");
+  Serial.println("=========================");
+
+  Serial.print("GET ");
+  Serial.println(url);
+
+  http.setTimeout(5000);
+
+  if (!http.begin(client, url)) {
+
+    Serial.println("Falha http.begin() Kuma");
+    return;
+  }
+
+  int code = http.GET();
+
+  Serial.print("Kuma HTTP Code: ");
+  Serial.println(code);
+
+  if (code > 0) {
+
+    String response = http.getString();
+
+    Serial.println("Resposta Kuma:");
+    Serial.println(response);
+
+  } else {
+
+    Serial.print("Erro Kuma: ");
+    Serial.println(http.errorToString(code));
+  }
+
+  http.end();
 }
 
 /* =========================
@@ -78,6 +155,11 @@ bool loadData() {
   if (WiFi.status() != WL_CONNECTED) {
 
     Serial.println("WiFi desconectado");
+
+    apiConnected = false;
+
+    sendKuma(false);
+
     return false;
   }
 
@@ -97,6 +179,11 @@ bool loadData() {
   if (!http.begin(client, apiUrl)) {
 
     Serial.println("Falha http.begin()");
+
+    apiConnected = false;
+
+    sendKuma(false);
+
     return false;
   }
 
@@ -110,7 +197,12 @@ bool loadData() {
     Serial.print("Erro HTTP: ");
     Serial.println(http.errorToString(httpCode));
 
+    apiConnected = false;
+
+    sendKuma(false);
+
     http.end();
+
     return false;
   }
 
@@ -132,7 +224,12 @@ bool loadData() {
     Serial.println("ERRO JSON");
     Serial.println(error.c_str());
 
+    apiConnected = false;
+
+    sendKuma(false);
+
     http.end();
+
     return false;
   }
 
@@ -157,6 +254,10 @@ bool loadData() {
   Serial.print("Power: ");
   Serial.println(power);
 
+  apiConnected = true;
+
+  sendKuma(true);
+
   http.end();
 
   return true;
@@ -172,38 +273,98 @@ void drawDisplay() {
 
   display.setTextColor(SSD1306_WHITE);
 
-  // Temperatura
+  /* -------------------------
+     Indicador Status
+  ------------------------- */
+
+  if (apiConnected) {
+
+    if (millis() - lastBlink > 500) {
+
+      blinkState = !blinkState;
+
+      lastBlink = millis();
+    }
+
+    if (blinkState) {
+
+      display.fillCircle(
+          122,
+          5,
+          3,
+          SSD1306_WHITE
+      );
+
+    } else {
+
+      display.drawCircle(
+          122,
+          5,
+          3,
+          SSD1306_WHITE
+      );
+    }
+
+  } else {
+
+    display.drawCircle(
+        122,
+        5,
+        3,
+        SSD1306_WHITE
+    );
+  }
+
+  /* -------------------------
+     Temperatura
+  ------------------------- */
 
   display.setTextSize(2);
+
   display.setCursor(0, 0);
 
   display.print(temp, 1);
-  display.write(247);   // °
+
+  display.write(247);
+
   display.print("C");
 
-  // Umidade
+  /* -------------------------
+     Umidade
+  ------------------------- */
 
   display.setTextSize(1);
+
   display.setCursor(0, 22);
 
   display.print("Hum ");
+
   display.print(humidity, 0);
+
   display.print("%");
 
-  // Corrente
+  /* -------------------------
+     Corrente
+  ------------------------- */
 
   display.setCursor(0, 34);
 
   display.print("Amp ");
+
   display.print(current, 2);
+
   display.print("A");
 
-  // Potencia
+  /* -------------------------
+     Potência
+  ------------------------- */
 
   display.setCursor(0, 46);
 
   display.print("Pwr ");
+
   display.print(power, 0);
+
   display.print("W");
 
   display.display();
@@ -218,7 +379,9 @@ void setup() {
   Serial.begin(115200);
 
   Serial.println();
+  Serial.println("=========================");
   Serial.println("BOOT");
+  Serial.println("=========================");
 
   Wire.begin();
 
@@ -239,6 +402,7 @@ void setup() {
   connectWifi();
 
   loadData();
+
   drawDisplay();
 }
 
@@ -248,15 +412,14 @@ void setup() {
 
 void loop() {
 
-  static unsigned long lastUpdate = 0;
-
-  if (millis() - lastUpdate > 10000) {
+  if (millis() - lastUpdate >= 10000) {
 
     lastUpdate = millis();
 
-    if (loadData()) {
-
-      drawDisplay();
-    }
+    loadData();
   }
+
+  drawDisplay();
+
+  delay(100);
 }
