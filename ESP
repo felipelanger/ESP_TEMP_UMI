@@ -1,194 +1,262 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266HTTPClient.h>
-#include <DHT.h>
+#include <ArduinoJson.h>
 
-// ===================================
-// WIFI
-// ===================================
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+/* =========================
+   WIFI
+========================= */
 
 const char* ssid = "NINA_2.4G";
 const char* password = "132#Internet";
 
-// ===================================
-// INFLUXDB
-// ===================================
+/* =========================
+   API
+========================= */
 
-const char* influxHost = "ubuntuserver.local";
-const int influxPort = 8086;
+const char* apiUrl =
+    "http://ubuntuserver.local:5000/api/oled";
 
-const char* database = "IOT_DB";
+/* =========================
+   OLED
+========================= */
 
-// ===================================
-// DHT22
-// ===================================
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
 
-#define DHTPIN 0
-#define DHTTYPE DHT22
+Adafruit_SSD1306 display(
+    SCREEN_WIDTH,
+    SCREEN_HEIGHT,
+    &Wire,
+    OLED_RESET
+);
 
-DHT dht(DHTPIN, DHTTYPE);
+/* =========================
+   VARIÁVEIS
+========================= */
 
-// ===================================
-// SETUP
-// ===================================
+float temp = 0;
+float humidity = 0;
+float current = 0;
+float power = 0;
+
+/* =========================
+   WIFI
+========================= */
+
+void connectWifi() {
+
+  Serial.println();
+  Serial.println("=========================");
+  Serial.println("CONECTANDO WIFI");
+  Serial.println("=========================");
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi conectado!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+/* =========================
+   API
+========================= */
+
+bool loadData() {
+
+  if (WiFi.status() != WL_CONNECTED) {
+
+    Serial.println("WiFi desconectado");
+    return false;
+  }
+
+  WiFiClient client;
+  HTTPClient http;
+
+  Serial.println();
+  Serial.println("=========================");
+  Serial.println("TESTE API");
+  Serial.println("=========================");
+
+  Serial.print("GET ");
+  Serial.println(apiUrl);
+
+  http.setTimeout(10000);
+
+  if (!http.begin(client, apiUrl)) {
+
+    Serial.println("Falha http.begin()");
+    return false;
+  }
+
+  int httpCode = http.GET();
+
+  Serial.print("HTTP Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode != HTTP_CODE_OK) {
+
+    Serial.print("Erro HTTP: ");
+    Serial.println(http.errorToString(httpCode));
+
+    http.end();
+    return false;
+  }
+
+  String payload = http.getString();
+
+  Serial.println();
+  Serial.println("JSON RECEBIDO");
+  Serial.println("---------------------------------");
+  Serial.println(payload);
+
+  DynamicJsonDocument doc(1024);
+
+  DeserializationError error =
+      deserializeJson(doc, payload);
+
+  if (error) {
+
+    Serial.println();
+    Serial.println("ERRO JSON");
+    Serial.println(error.c_str());
+
+    http.end();
+    return false;
+  }
+
+  temp = doc["temp"] | 0.0;
+  humidity = doc["humidity"] | 0.0;
+  current = doc["current"] | 0.0;
+  power = doc["power"] | 0.0;
+
+  Serial.println();
+  Serial.println("VALORES EXTRAIDOS");
+  Serial.println("---------------------------------");
+
+  Serial.print("Temp: ");
+  Serial.println(temp);
+
+  Serial.print("Humidity: ");
+  Serial.println(humidity);
+
+  Serial.print("Current: ");
+  Serial.println(current);
+
+  Serial.print("Power: ");
+  Serial.println(power);
+
+  http.end();
+
+  return true;
+}
+
+/* =========================
+   OLED
+========================= */
+
+void drawDisplay() {
+
+  display.clearDisplay();
+
+  display.setTextColor(SSD1306_WHITE);
+
+  // Temperatura
+
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+
+  display.print(temp, 1);
+  display.write(247);   // °
+  display.print("C");
+
+  // Umidade
+
+  display.setTextSize(1);
+  display.setCursor(0, 22);
+
+  display.print("Hum ");
+  display.print(humidity, 0);
+  display.print("%");
+
+  // Corrente
+
+  display.setCursor(0, 34);
+
+  display.print("Amp ");
+  display.print(current, 2);
+  display.print("A");
+
+  // Potencia
+
+  display.setCursor(0, 46);
+
+  display.print("Pwr ");
+  display.print(power, 0);
+  display.print("W");
+
+  display.display();
+}
+
+/* =========================
+   SETUP
+========================= */
 
 void setup() {
 
   Serial.begin(115200);
 
   Serial.println();
-  Serial.println("================================");
-  Serial.println("Inicializando Sensor DHT22");
-  Serial.println("================================");
+  Serial.println("BOOT");
 
-  dht.begin();
+  Wire.begin();
 
-  WiFi.begin(
-      ssid,
-      password
-  );
+  if (!display.begin(
+          SSD1306_SWITCHCAPVCC,
+          0x3C)) {
 
-  Serial.print("Conectando WiFi");
+    Serial.println("Falha OLED");
 
-  while (
-      WiFi.status()
-      != WL_CONNECTED
-  ) {
-
-      delay(500);
-      Serial.print(".");
-  }
-
-  Serial.println();
-  Serial.println("WiFi conectado!");
-
-  Serial.print("IP: ");
-  Serial.println(
-      WiFi.localIP()
-  );
-
-  delay(2000);
-}
-
-// ===================================
-// LOOP
-// ===================================
-
-void loop() {
-
-  float temperatura =
-      dht.readTemperature();
-
-  float umidade =
-      dht.readHumidity();
-
-  if (
-      isnan(temperatura) ||
-      isnan(umidade)
-  ) {
-
-      Serial.println(
-          "Erro ao ler DHT22"
-      );
-
-      delay(5000);
-      return;
-  }
-
-  Serial.println();
-  Serial.println("Leitura Atual");
-
-  Serial.print("Temperatura: ");
-  Serial.print(temperatura);
-  Serial.println(" °C");
-
-  Serial.print("Umidade: ");
-  Serial.print(umidade);
-  Serial.println(" %");
-
-  enviarParaInflux(
-      temperatura,
-      umidade
-  );
-
-  delay(30000);
-}
-
-// ===================================
-// ENVIO PARA INFLUX
-// ===================================
-
-void enviarParaInflux(
-    float temperatura,
-    float umidade
-) {
-
-  if (
-      WiFi.status()
-      != WL_CONNECTED
-  ) {
-
-    Serial.println(
-        "WiFi desconectado"
-    );
-
-    return;
-  }
-
-  WiFiClient client;
-  HTTPClient http;
-
-  String url =
-      "http://"
-      + String(influxHost)
-      + ":"
-      + String(influxPort)
-      + "/write?db="
-      + String(database);
-
-  String payload =
-      "central_temp_umi_raw "
-      "temperatura="
-      + String(temperatura, 2)
-      + ",umidade="
-      + String(umidade, 2);
-
-  Serial.println();
-  Serial.println("Payload enviado:");
-
-  Serial.println(payload);
-
-  http.begin(client, url);
-
-  http.addHeader(
-      "Content-Type",
-      "text/plain"
-  );
-
-  int httpCode =
-      http.POST(payload);
-
-  Serial.print(
-      "HTTP Code: "
-  );
-
-  Serial.println(
-      httpCode
-  );
-
-  if (httpCode > 0) {
-
-    String response =
-        http.getString();
-
-    if (
-        response.length() > 0
-    ) {
-
-      Serial.println(
-          response
-      );
+    while (true) {
+      delay(1000);
     }
   }
 
-  http.end();
+  display.clearDisplay();
+  display.display();
+
+  connectWifi();
+
+  loadData();
+  drawDisplay();
+}
+
+/* =========================
+   LOOP
+========================= */
+
+void loop() {
+
+  static unsigned long lastUpdate = 0;
+
+  if (millis() - lastUpdate > 10000) {
+
+    lastUpdate = millis();
+
+    if (loadData()) {
+
+      drawDisplay();
+    }
+  }
 }
