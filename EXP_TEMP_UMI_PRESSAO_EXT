@@ -1,0 +1,238 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+
+#include <Wire.h>
+#include <DHT.h>
+#include <Adafruit_BMP280.h>
+
+/* =====================================
+   WIFI
+===================================== */
+
+const char* ssid = "NINA_2.4G";
+const char* password = "132#Internet";
+
+/* =====================================
+   INFLUXDB
+===================================== */
+
+const char* influxUrl =
+  "http://ubuntuserver.local:8086/write?db=IOT_DB";
+
+/* =====================================
+   UPTIME KUMA
+===================================== */
+
+const char* kumaUrl =
+  "http://ubuntuserver.local:3001/api/push/uT2tZWDcPK?status=up&msg=OK&ping=10000";
+
+/* =====================================
+   DHT22
+===================================== */
+
+#define DHTPIN 0
+#define DHTTYPE DHT22
+
+DHT dht(DHTPIN, DHTTYPE);
+
+/* =====================================
+   BMP280
+===================================== */
+
+#define SDA_PIN 4
+#define SCL_PIN 5
+
+Adafruit_BMP280 bmp;
+
+/* =====================================
+   CONTROLE
+===================================== */
+
+unsigned long lastSend = 0;
+const unsigned long interval = 10000;
+
+/* =====================================
+   WIFI
+===================================== */
+
+void connectWifi() {
+
+  Serial.println();
+  Serial.println("Conectando WiFi...");
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi conectado!");
+
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+/* =====================================
+   UPTIME KUMA
+===================================== */
+
+void sendKuma() {
+
+  if (WiFi.status() != WL_CONNECTED)
+    return;
+
+  WiFiClient client;
+  HTTPClient http;
+
+  http.begin(client, kumaUrl);
+
+  int httpCode = http.GET();
+
+  Serial.print("Kuma HTTP Code: ");
+  Serial.println(httpCode);
+
+  http.end();
+}
+
+/* =====================================
+   ENVIO INFLUX
+===================================== */
+
+void sendToInflux() {
+
+  float temp_01_dht = dht.readTemperature();
+  float umidade     = dht.readHumidity();
+
+  float temp_02_bmp = bmp.readTemperature();
+
+  float pressao =
+      bmp.readPressure() / 100.0F;
+
+  float altitude =
+      bmp.readAltitude(1013.25);
+
+  if (isnan(temp_01_dht) || isnan(umidade)) {
+
+    Serial.println("Erro leitura DHT22");
+    return;
+  }
+
+  float temp =
+      (temp_01_dht + temp_02_bmp) / 2.0;
+
+  Serial.println();
+  Serial.println("====================================");
+
+  Serial.print("temp_01_dht: ");
+  Serial.println(temp_01_dht, 1);
+
+  Serial.print("temp_02_bmp: ");
+  Serial.println(temp_02_bmp, 1);
+
+  Serial.print("temp: ");
+  Serial.println(temp, 1);
+
+  Serial.print("umidade: ");
+  Serial.println(umidade, 1);
+
+  Serial.print("pressao: ");
+  Serial.println(pressao, 1);
+
+  Serial.print("altitude: ");
+  Serial.println(altitude, 1);
+
+  if (WiFi.status() != WL_CONNECTED) {
+
+    Serial.println("WiFi desconectado");
+    return;
+  }
+
+  String payload =
+      "central_temp_umi_raw "
+      "temp_01_dht=" + String(temp_01_dht, 1) +
+      ",temp_02_bmp=" + String(temp_02_bmp, 1) +
+      ",temp=" + String(temp, 1) +
+      ",umidade=" + String(umidade, 1) +
+      ",pressao=" + String(pressao, 1) +
+      ",altitude=" + String(altitude, 1);
+
+  Serial.println();
+  Serial.println("Payload:");
+  Serial.println(payload);
+
+  WiFiClient client;
+  HTTPClient http;
+
+  http.begin(client, influxUrl);
+
+  int httpCode = http.POST(payload);
+
+  Serial.print("Influx HTTP Code: ");
+  Serial.println(httpCode);
+
+  if (httpCode == 204) {
+
+    Serial.println("Dados enviados com sucesso!");
+
+    sendKuma();
+
+  } else {
+
+    Serial.println("Falha ao enviar dados");
+
+    if (httpCode > 0) {
+
+      Serial.println(http.getString());
+    }
+  }
+
+  http.end();
+}
+
+/* =====================================
+   SETUP
+===================================== */
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(2000);
+
+  Serial.println();
+  Serial.println("Inicializando sensores...");
+
+  dht.begin();
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  if (!bmp.begin(0x76)) {
+
+    Serial.println("BMP280 nao encontrado");
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("BMP280 encontrado");
+
+  connectWifi();
+}
+
+/* =====================================
+   LOOP
+===================================== */
+
+void loop() {
+
+  if (millis() - lastSend >= interval) {
+
+    lastSend = millis();
+
+    sendToInflux();
+  }
+}
